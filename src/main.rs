@@ -16,6 +16,7 @@ use std::collections::hash_map::Entry;
 use std::thread;
 use std::str::FromStr;
 
+use futures::executor::block_on;
 use deque::{Stealer, Stolen};
 use regex::Regex;
 use edit_distance::edit_distance as distance;
@@ -40,7 +41,7 @@ struct FileCount {
 
 // This concurrency pattern ripped directly from ripgrep
 impl Worker {
-    fn run(self) -> Vec<FileCount> {
+    async fn run(self) -> Vec<FileCount> {
         let mut v: Vec<FileCount> = vec![];
         loop {
             match self.chan.steal() {
@@ -50,7 +51,7 @@ impl Worker {
                 Stolen::Data(Work::URL(path)) => {
                     let lang = lang_from_ext(&path);
                     if lang != Lang::Unrecognized {
-                        let count = count(&path);
+                        let count = count(&path).await;
                         v.push(FileCount {
                             lang,
                             path,
@@ -229,14 +230,13 @@ fn main() {
     let (workq, stealer) = deque::new();
     for _ in 0..threads {
         let worker = Worker { chan: stealer.clone() };
-        workers.push(thread::spawn(|| worker.run()));
+        workers.push(thread::spawn(|| block_on(worker.run()));
     }
 
     for target in targets {
-        // TODO(cgag): use WalkParallel?
         let ls_url = format!("https://api.github.com/repos/{}/{}/git/trees/{}", user, repo, branch);
-        let file_urls = get_file_urls(ls_url, target);
-        for url in file_paths {
+        let file_urls = get_file_urls(ls_url, ".", target);
+        for url in file_urls {
             workq.push(Work::URL(url));
         }
     }
@@ -354,8 +354,8 @@ struct FilePath {
     url: String
 }
 
-fn get_file_urls(url: String, current_subdir: String, target_path: String) -> Vec<String> {
-    let ls_res = reqwest::get(ls_url).await?.json::<LSResponse>().await?;
+async fn get_file_urls(url: String, current_subdir: &str, target_path: &str) -> Vec<String> {
+    let ls_res = reqwest::get(url).await.unwrap().json::<LSResponse>().await?;
     let mut result: Vec<String> = vec![];
     for fp in ls_res.tree {
         let lang = lang_from_ext(&fp.path);
@@ -363,7 +363,7 @@ fn get_file_urls(url: String, current_subdir: String, target_path: String) -> Ve
             result.push(fp.url);
         } else {
             if target_path.starts_with(current_subdir) {
-                let mut urls = get_file_paths(leaf.url, format!("{}/{}", current_subdir, leaf.path), );
+                let mut urls = get_file_urls(fp.url, format!("{}/{}", current_subdir, fp.path), target_path).await;
                 result.append(&mut urls)
             }
         }
