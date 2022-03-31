@@ -594,11 +594,11 @@ impl<'a> Iterator for ByteLinesState<'a> {
 
 // TODO(cgag): do we have to worry about the case of single line comments being nested in multis?
 // I dn't think so but i should think about it.
-pub async fn count(url: &str) -> Count {
+pub fn count(url: &str) -> Count {
     let lang = lang_from_ext(url);
     let (singles, multis) = counter_config_for_lang(lang);
 
-    let bytes = reqwest::get(url).await.unwrap().bytes().await.unwrap();
+    let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
 
     let mut c = Count::default();
     let mut multi_stack: Vec<(&str, &str)> = vec![];

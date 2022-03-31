@@ -9,14 +9,13 @@ extern crate ignore;
 extern crate edit_distance;
 
 use clap::{Arg, App, AppSettings};
-use ignore::WalkBuilder;
+use serde::Deserialize;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::thread;
 use std::str::FromStr;
 
-use futures::executor::block_on;
 use deque::{Stealer, Stolen};
 use regex::Regex;
 use edit_distance::edit_distance as distance;
@@ -41,7 +40,7 @@ struct FileCount {
 
 // This concurrency pattern ripped directly from ripgrep
 impl Worker {
-    async fn run(self) -> Vec<FileCount> {
+    fn run(self) -> Vec<FileCount> {
         let mut v: Vec<FileCount> = vec![];
         loop {
             match self.chan.steal() {
@@ -51,7 +50,7 @@ impl Worker {
                 Stolen::Data(Work::URL(path)) => {
                     let lang = lang_from_ext(&path);
                     if lang != Lang::Unrecognized {
-                        let count = count(&path).await;
+                        let count = count(&path);
                         v.push(FileCount {
                             lang,
                             path,
@@ -230,7 +229,7 @@ fn main() {
     let (workq, stealer) = deque::new();
     for _ in 0..threads {
         let worker = Worker { chan: stealer.clone() };
-        workers.push(thread::spawn(|| block_on(worker.run()));
+        workers.push(thread::spawn(|| worker.run()));
     }
 
     for target in targets {
@@ -354,8 +353,8 @@ struct FilePath {
     url: String
 }
 
-async fn get_file_urls(url: String, current_subdir: &str, target_path: &str) -> Vec<String> {
-    let ls_res = reqwest::get(url).await.unwrap().json::<LSResponse>().await?;
+fn get_file_urls(url: String, current_subdir: &str, target_path: &str) -> Vec<String> {
+    let ls_res = reqwest::blocking::get(url).unwrap().json::<LSResponse>().unwrap();
     let mut result: Vec<String> = vec![];
     for fp in ls_res.tree {
         let lang = lang_from_ext(&fp.path);
@@ -363,7 +362,7 @@ async fn get_file_urls(url: String, current_subdir: &str, target_path: &str) -> 
             result.push(fp.url);
         } else {
             if target_path.starts_with(current_subdir) {
-                let mut urls = get_file_urls(fp.url, format!("{}/{}", current_subdir, fp.path), target_path).await;
+                let mut urls = get_file_urls(fp.url, &format!("{}/{}", current_subdir, fp.path), target_path);
                 result.append(&mut urls)
             }
         }
