@@ -23,7 +23,7 @@ use edit_distance::edit_distance as distance;
 use loc::*;
 
 enum Work {
-    File(String),
+    URL(String),
     Quit,
 }
 
@@ -47,7 +47,7 @@ impl Worker {
                 // What causes these?
                 Stolen::Empty | Stolen::Abort => continue,
                 Stolen::Data(Work::Quit) => break,
-                Stolen::Data(Work::File(path)) => {
+                Stolen::Data(Work::URL(path)) => {
                     let lang = lang_from_ext(&path);
                     if lang != Lang::Unrecognized {
                         let count = count(&path);
@@ -108,6 +108,18 @@ fn main() {
         .version(crate_version!())
         .author("Curtis Gagliardi <curtis@curtis.io>")
         .about("counts things quickly hopefully")
+        .arg(Arg::with_name("user")
+            .required(true)
+            .long("username")
+            .short("u")
+            .takes_value(true)
+            .help("Username of owner of repository"))
+        .arg(Arg::with_name("repo")
+            .required(true)
+            .long("repository")
+            .short("r")
+            .takes_value(true)
+            .help("Repository name"))
         .arg(Arg::with_name("exclude")
             .required(false)
             .multiple(true)
@@ -137,7 +149,7 @@ fn main() {
              .required(false)
              .multiple(true)
              .long("unrestricted")
-             .short("u")
+             .short("ur")
              .takes_value(false)
              .help("A single -u won't respect .gitignore (etc.) files. Two -u flags will additionally count hidden files and directories."))
         .arg(Arg::with_name("target")
@@ -149,6 +161,9 @@ fn main() {
         Some(targets) => targets.collect(),
         None => vec!["."]
     };
+
+    let (user, repo) = (matches.value_of("user").unwrap(), matches.value_of("repo").unwrap());
+    let branch = matches.value_of("branch").unwrap_or("master");
 
     let sort: Sort = match matches.value_of("sort") {
         Some(string) => match Sort::from_str(string) {
@@ -219,26 +234,10 @@ fn main() {
 
     for target in targets {
         // TODO(cgag): use WalkParallel?
-        let walker = WalkBuilder::new(target).ignore(use_ignore)
-                                             .git_ignore(use_ignore)
-                                             .git_exclude(use_ignore)
-                                             .hidden(ignore_hidden)
-                                             .build();
-        let files = walker
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().expect("no filetype").is_file())
-            .map(|entry| String::from(entry.path().to_str().unwrap()))
-            .filter(|path| match include_regex {
-                None => true,
-                Some(ref include) => include.is_match(path),
-            })
-            .filter(|path| match exclude_regex {
-                None => true,
-                Some(ref exclude) => !exclude.is_match(path),
-            });
-
-        for path in files {
-            workq.push(Work::File(path));
+        let ls_url = format!("https://api.github.com/repos/{}/{}/git/trees/{}", user, repo, branch);
+        let file_urls = get_file_urls(ls_url, target);
+        for url in file_paths {
+            workq.push(Work::URL(url));
         }
     }
 
@@ -342,6 +341,35 @@ fn main() {
         print_totals_by_lang(&linesep, &totals_by_lang);
     }
 
+}
+
+#[derive(Deserialize)]
+struct LSResponse {
+    tree: Vec<FilePath>
+}
+
+#[derive(Deserialize)]
+struct FilePath {
+    path: String,
+    url: String
+}
+
+fn get_file_urls(url: String, current_subdir: String, target_path: String) -> Vec<String> {
+    let ls_res = reqwest::get(ls_url).await?.json::<LSResponse>().await?;
+    let mut result: Vec<String> = vec![];
+    for fp in ls_res.tree {
+        let lang = lang_from_ext(&fp.path);
+        if lang != Lang::Unrecognized {
+            result.push(fp.url);
+        } else {
+            if target_path.starts_with(current_subdir) {
+                let mut urls = get_file_paths(leaf.url, format!("{}/{}", current_subdir, leaf.path), );
+                result.append(&mut urls)
+            }
+        }
+    }
+
+    result
 }
 
 // TODO(cgag): i think this is in the stdlib

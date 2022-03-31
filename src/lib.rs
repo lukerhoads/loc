@@ -301,8 +301,8 @@ impl fmt::Display for Lang {
     }
 }
 
-pub fn lang_from_ext(filepath: &str) -> Lang {
-    let path = Path::new(filepath);
+pub fn lang_from_ext(url: &str) -> Lang {
+    let path = Path::new(url);
     let file_name_lower = path.file_name()
         .expect("no filename?")
         .to_str()
@@ -594,21 +594,11 @@ impl<'a> Iterator for ByteLinesState<'a> {
 
 // TODO(cgag): do we have to worry about the case of single line comments being nested in multis?
 // I dn't think so but i should think about it.
-pub fn count(filepath: &str) -> Count {
-    let lang = lang_from_ext(filepath);
+pub fn count(url: &str) -> Count {
+    let lang = lang_from_ext(url);
     let (singles, multis) = counter_config_for_lang(lang);
 
-    let mfile = File::open(filepath);
-    let mut file = match mfile {
-        Ok(file) => file,
-        Err(_) => {
-            return Count::default();
-        }
-    };
-    // TODO(cgag): set the size of this vec to size of the file + a byte? a reddit comment
-    // somewhere says fs::read will do this ofr you.
-    let mut bytes = vec![];
-    file.read_to_end(&mut bytes).expect("nani?!");
+    let mut bytes = reqwest::get(url).await.unwrap().bytes().await.unwrap();
 
     let mut c = Count::default();
     let mut multi_stack: Vec<(&str, &str)> = vec![];
