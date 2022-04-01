@@ -598,7 +598,8 @@ pub fn count(url: &str) -> Count {
     let lang = lang_from_ext(url);
     let (singles, multis) = counter_config_for_lang(lang);
 
-    let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
+    let client = reqwest::blocking::Client::new();
+    let bytes = client.get(url).header("User-Agent", "loc").send().unwrap().bytes().unwrap();
 
     let mut c = Count::default();
     let mut multi_stack: Vec<(&str, &str)> = vec![];

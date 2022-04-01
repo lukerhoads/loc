@@ -11,7 +11,7 @@ extern crate edit_distance;
 use clap::{Arg, App, AppSettings};
 use serde::Deserialize;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, thread::current};
 use std::collections::hash_map::Entry;
 use std::thread;
 use std::str::FromStr;
@@ -103,7 +103,7 @@ impl FromStr for Sort {
 // TODO(cgag): try smallstring
 // TODO(cgag): more tests for nested comments
 fn main() {
-    let matches = App::new("loc")
+    let matches = App::new("rloc")
         .global_settings(&[AppSettings::ColoredHelp])
         .version(crate_version!())
         .author("Curtis Gagliardi <curtis@curtis.io>")
@@ -111,13 +111,11 @@ fn main() {
         .arg(Arg::with_name("user")
             .required(true)
             .long("username")
-            .short("u")
             .takes_value(true)
             .help("Username of owner of repository"))
         .arg(Arg::with_name("repo")
             .required(true)
             .long("repository")
-            .short("r")
             .takes_value(true)
             .help("Repository name"))
         .arg(Arg::with_name("exclude")
@@ -234,7 +232,12 @@ fn main() {
 
     for target in targets {
         let ls_url = format!("https://api.github.com/repos/{}/{}/git/trees/{}", user, repo, branch);
-        let file_urls = get_file_urls(ls_url, ".", target);
+        let content_url = format!("https://raw.githubusercontent.com/{}/{}/{}", user, repo, branch);
+        let file_paths = get_file_paths(ls_url, "/", target);
+        let mut file_urls = vec![];
+        for file_path in file_paths {
+            file_urls.push(format!("{}{}", content_url, file_path));
+        }
         for url in file_urls {
             workq.push(Work::URL(url));
         }
@@ -342,29 +345,31 @@ fn main() {
 
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct LSResponse {
     tree: Vec<FilePath>
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct FilePath {
     path: String,
-    url: String
+    url: String,
+    #[serde(rename = "type")]
+    _type: String 
 }
 
-fn get_file_urls(url: String, current_subdir: &str, target_path: &str) -> Vec<String> {
-    let ls_res = reqwest::blocking::get(url).unwrap().json::<LSResponse>().unwrap();
+fn get_file_paths(url: String, current_subdir: &str, target_path: &str) -> Vec<String> {
+    let client = reqwest::blocking::Client::new();
+    let ls_res = client.get(url).header("User-Agent", "loc").send().unwrap().json::<LSResponse>().unwrap();
     let mut result: Vec<String> = vec![];
     for fp in ls_res.tree {
-        let lang = lang_from_ext(&fp.path);
-        if lang != Lang::Unrecognized {
-            result.push(fp.url);
+        if fp._type == "blob" {
+            let new_path = format!("{}{}", current_subdir, &fp.path);
+            result.push(new_path);
         } else {
-            if target_path.starts_with(current_subdir) {
-                let mut urls = get_file_urls(fp.url, &format!("{}/{}", current_subdir, fp.path), target_path);
-                result.append(&mut urls)
-            }
+            let new_path = format!("{}{}/", current_subdir, fp.path);
+            let mut paths = get_file_paths(fp.url, &new_path, target_path);
+            result.append(&mut paths);
         }
     }
 
