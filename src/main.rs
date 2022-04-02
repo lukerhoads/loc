@@ -108,8 +108,9 @@ fn main() {
         .version(crate_version!())
         .author("Curtis Gagliardi <curtis@curtis.io>")
         .about("counts things quickly hopefully")
-        .arg(Arg::with_name("user")
+        .arg(Arg::with_name("username")
             .required(true)
+            .short("user")
             .long("username")
             .takes_value(true)
             .help("Username of owner of repository"))
@@ -118,6 +119,19 @@ fn main() {
             .long("repository")
             .takes_value(true)
             .help("Repository name"))
+        .arg(Arg::with_name("branch")
+            .required(true)
+            .long("branch")
+            .takes_value(true)
+            .help("Branch name"))
+        .arg(Arg::with_name("token")
+            .long("token")
+            .takes_value(true)
+            .help("Personal access token"))
+        .arg(Arg::with_name("entity")
+            .long("entity")
+            .takes_value(true)
+            .help("Your Github username"))
         .arg(Arg::with_name("exclude")
             .required(false)
             .multiple(true)
@@ -147,7 +161,6 @@ fn main() {
              .required(false)
              .multiple(true)
              .long("unrestricted")
-             .short("ur")
              .takes_value(false)
              .help("A single -u won't respect .gitignore (etc.) files. Two -u flags will additionally count hidden files and directories."))
         .arg(Arg::with_name("target")
@@ -160,7 +173,23 @@ fn main() {
         None => vec!["."]
     };
 
-    let (user, repo) = (matches.value_of("user").unwrap(), matches.value_of("repo").unwrap());
+    let pat = match matches.value_of("token") {
+        Some(pat) => pat,
+        None => {
+            println!("Using unauthenticated requests... going to be rate limited soon");
+            ""
+        },
+    };
+
+    let entity = match matches.value_of("entity") {
+        Some(pat) => pat,
+        None => {
+            println!("Using unauthenticated requests... going to be rate limited soon");
+            ""
+        },
+    };
+
+    let (user, repo) = (matches.value_of("username").unwrap(), matches.value_of("repo").unwrap());
     let branch = matches.value_of("branch").unwrap_or("master");
 
     let sort: Sort = match matches.value_of("sort") {
@@ -233,7 +262,8 @@ fn main() {
     for target in targets {
         let ls_url = format!("https://api.github.com/repos/{}/{}/git/trees/{}", user, repo, branch);
         let content_url = format!("https://raw.githubusercontent.com/{}/{}/{}", user, repo, branch);
-        let file_paths = get_file_paths(ls_url, "/", target);
+        let key = base64::encode(format!("lukerhoads:{}", pat));
+        let file_paths = get_file_paths(ls_url, key, "/", target);
         let mut file_urls = vec![];
         for file_path in file_paths {
             file_urls.push(format!("{}{}", content_url, file_path));
@@ -353,14 +383,28 @@ struct LSResponse {
 #[derive(Debug, Deserialize)]
 struct FilePath {
     path: String,
-    url: String,
+    url: Option<String>,
     #[serde(rename = "type")]
     _type: String 
 }
 
-fn get_file_paths(url: String, current_subdir: &str, target_path: &str) -> Vec<String> {
+fn get_file_paths(url: String, key: String, current_subdir: &str, target_path: &str) -> Vec<String> {
     let client = reqwest::blocking::Client::new();
-    let ls_res = client.get(url).header("User-Agent", "loc").send().unwrap().json::<LSResponse>().unwrap();
+    let ls_res = if key != "" {
+        match client.get(&url).header("User-Agent", "loc").header("Authorization", format!("Basic {}", key)).send().unwrap().json::<LSResponse>() {
+            Ok(r) => r,
+            Err(e) => {
+                panic!("Invalid username, repo, or branch {:?}", e)
+            },
+        }
+    } else {
+        match client.get(&url).header("User-Agent", "loc").send().unwrap().json::<LSResponse>() {
+            Ok(r) => r,
+            Err(e) => {
+                panic!("Invalid username, repo, or branch {:?}", e)
+            },
+        }
+    };
     let mut result: Vec<String> = vec![];
     for fp in ls_res.tree {
         if fp._type == "blob" {
@@ -368,8 +412,10 @@ fn get_file_paths(url: String, current_subdir: &str, target_path: &str) -> Vec<S
             result.push(new_path);
         } else {
             let new_path = format!("{}{}/", current_subdir, fp.path);
-            let mut paths = get_file_paths(fp.url, &new_path, target_path);
-            result.append(&mut paths);
+            if let Some(url) = fp.url {
+                let mut paths = get_file_paths(url, key.clone(), &new_path, target_path);
+                result.append(&mut paths);
+            }
         }
     }
 
